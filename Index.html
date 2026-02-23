@@ -1,0 +1,43 @@
+from sambanova import SambaNova
+
+# Initialize the client
+# Use your key here, but remember to rotate it later since it was shared!
+client = SambaNova(
+    api_key="54e7a7db-2ae4-48b7-a6a2-010d4031b8b0", 
+    base_url="https://api.sambanova.ai/v1",
+)
+
+# This list stores the conversation history (Memory)
+messages = [
+    {"role": "system", "content": "You are a highly intelligent AI agent powered by SambaNova. Be concise and helpful."}
+]
+
+print("--- SambaNova AI Agent Active (Type 'quit' to exit) ---")
+
+while True:
+    user_input = input("\nUser: ")
+    if user_input.lower() in ["quit", "exit", "bye"]:
+        break
+
+    messages.append({"role": "user", "content": user_input})
+
+    # Call the model (Meta-Llama-3.1-70B or 405B are popular choices on SambaNova)
+    stream = client.chat.completions.create(
+        model="Meta-Llama-3.1-70B-Instruct",
+        messages=messages,
+        stream=True,
+    )
+
+    print("AI: ", end="", flush=True)
+    full_response = ""
+    
+    # Process the stream
+    for chunk in stream:
+        content = chunk.choices[0].delta.content
+        if content:
+            print(content, end="", flush=True)
+            full_response += content
+
+    # Save the assistant's reply to memory
+    messages.append({"role": "assistant", "content": full_response})
+    print() 
