@@ -1,0 +1,30 @@
+# LiveKit configuration for Al-Uloom Academy
+# Self-hosted SFU that beats Zoom/Teams on privacy and cost
+
+port: 7880
+rtc:
+  port: 7881
+  use_external_ip: false
+  tcp_port: 7881
+  port_range_start: 7882
+  port_range_end: 7892
+
+redis:
+  address: redis:6379
+  
+logging:
+  level: info
+
+webhook:
+  api_key: ${LIVEKIT_API_KEY}
+  urls:
+    - http://backend:8000/webhooks/livekit/
+
+room:
+  auto_create: true
+  max_participants: 100
+  empty_timeout: 300  # 5 minutes
+
+egress:
+  use_psrpc: true
+  
