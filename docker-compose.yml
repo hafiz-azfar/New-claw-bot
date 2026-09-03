@@ -1,0 +1,168 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:16-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aluloom}
+      POSTGRES_USER: ${POSTGRES_USER:-aluloom}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aluloom}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aluloom}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aluloom-network
+
+  # Redis for caching, Celery broker, Channels layer
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aluloom-network
+
+  # MinIO for object storage (S3-compatible)
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aluloom-network
+
+  # Django Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py collectstatic --noinput &&
+             gunicorn aluloom.wsgi:application --bind 0.0.0.0:8000"
+    volumes:
+      - ./backend:/app
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    env_file: .env
+    environment:
+      DJANGO_DEBUG: "True"
+      POSTGRES_HOST: db
+      REDIS_HOST: redis
+      MINIO_ENDPOINT: minio:9000
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - aluloom-network
+
+  # Celery Worker
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A aluloom worker --loglevel=info
+    volumes:
+      - ./backend:/app
+      - media_volume:/app/media
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db
+      REDIS_HOST: redis
+      MINIO_ENDPOINT: minio:9000
+    depends_on:
+      - backend
+      - redis
+      - minio
+    networks:
+      - aluloom-network
+
+  # Celery Beat (scheduled tasks)
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A aluloom beat --loglevel=info
+    volumes:
+      - ./backend:/app
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db
+      REDIS_HOST: redis
+    depends_on:
+      - backend
+      - redis
+    networks:
+      - aluloom-network
+
+  # LiveKit (self-hosted SFU for live video)
+  livekit:
+    image: livekit/livekit-server:latest
+    command: >
+      --config /etc/livekit.yaml
+      --dev
+    ports:
+      - "${LIVEKIT_PORT:-7880}:7880"
+      - "${LIVEKIT_RTC_PORT:-7881}:7881"
+      - "${LIVEKIT_UDP_RANGE:-7882-7892}"
+    volumes:
+      - ./docker/livekit.yaml:/etc/livekit.yaml
+    environment:
+      LIVEKIT_KEYS: ${LIVEKIT_API_KEY}:${LIVEKIT_API_SECRET}
+    networks:
+      - aluloom-network
+    depends_on:
+      - redis
+
+  # Nginx reverse proxy
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+      - static_volume:/app/staticfiles:ro
+      - media_volume:/app/media:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+    networks:
+      - aluloom-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  static_volume:
+  media_volume:
+
+networks:
+  aluloom-network:
+    driver: bridge
